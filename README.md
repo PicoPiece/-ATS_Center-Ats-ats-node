@@ -50,7 +50,27 @@ The ATS node provides:
 
 ## 📊 Status
 
-This repository provides the low-level hardware access and observation tools. Higher-level test logic is implemented in `ats-test-esp32-demo`.
+**Current Status: Placeholder / Future Enhancement**
+
+This repository is intended to provide low-level Python-based hardware access and observation tools. Currently, the working implementation uses shell scripts in `ats-test-esp32-demo`.
+
+**Current Implementation:**
+- `ats-test-esp32-demo` contains working shell scripts for hardware access (flash_fw.sh, run_tests.sh, etc.)
+- This repository (`ats-ats-node`) is a placeholder for future Python-based tools
+
+**Future Direction:**
+- This repository will provide Python modules for:
+  - Hardware abstraction layer
+  - Advanced power control
+  - Camera-based validation
+  - AI-based test validation
+  - Prometheus metrics export
+- `ats-test-esp32-demo` will optionally use these Python tools while maintaining shell script compatibility
+
+**Decision: Keep Separate**
+- This repository serves as a foundation for advanced features
+- Shell scripts in `ats-test-esp32-demo` remain the primary working implementation
+- Python tools here will be optional enhancements
 
 ---
 
