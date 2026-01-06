@@ -21,8 +21,19 @@ echo "   User: $(whoami)"
 echo "   UID: $(id -u)"
 echo "   GID: $(id -g)"
 echo "   Working directory: $(pwd)"
-echo "   Workspace contents:"
-ls -lah /workspace/ 2>&1 | head -20 || true
+echo "   MANIFEST_PATH: ${MANIFEST_PATH}"
+echo ""
+echo "   Checking if /workspace exists:"
+if [ -d "/workspace" ]; then
+    echo "   ✅ /workspace directory exists"
+    echo "   Workspace contents:"
+    ls -lah /workspace/ 2>&1 | head -20 || true
+    echo ""
+    echo "   Looking for manifest files:"
+    find /workspace -name "*manifest*" -o -name "*.yaml" 2>&1 | head -10 || true
+else
+    echo "   ❌ /workspace directory does NOT exist!"
+fi
 echo ""
 
 # Validate manifest exists - try multiple methods
