@@ -25,9 +25,26 @@ echo "   Workspace contents:"
 ls -lah /workspace/ 2>&1 | head -20 || true
 echo ""
 
-# Validate manifest exists
-if [ ! -f "$MANIFEST_PATH" ]; then
-    echo "❌ Manifest not found: ${MANIFEST_PATH}"
+# Validate manifest exists - try multiple methods
+MANIFEST_FOUND=false
+
+# Method 1: test -f
+if [ -f "$MANIFEST_PATH" ]; then
+    MANIFEST_FOUND=true
+fi
+
+# Method 2: test -r (readable)
+if [ -r "$MANIFEST_PATH" ]; then
+    MANIFEST_FOUND=true
+fi
+
+# Method 3: try to read first line
+if head -n 1 "$MANIFEST_PATH" > /dev/null 2>&1; then
+    MANIFEST_FOUND=true
+fi
+
+if [ "$MANIFEST_FOUND" = false ]; then
+    echo "❌ Manifest not found or not accessible: ${MANIFEST_PATH}"
     echo ""
     echo "🔍 Debugging:"
     echo "   Checking if path exists:"
@@ -38,6 +55,9 @@ if [ ! -f "$MANIFEST_PATH" ]; then
     echo ""
     echo "   Checking if file exists with different case:"
     find /workspace -iname "*manifest*" 2>&1 || echo "   No manifest files found"
+    echo ""
+    echo "   Trying to read file directly:"
+    cat "$MANIFEST_PATH" 2>&1 || echo "   Cannot read file"
     exit 1
 fi
 
