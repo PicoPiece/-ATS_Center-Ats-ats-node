@@ -70,6 +70,10 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
         echo ""
         echo "📝 To use this image, update Jenkinsfile.test:"
         echo "   ATS_NODE_TEST_IMAGE = '${FULL_IMAGE}'"
+        echo ""
+        echo "🔓 To make image public (for CI without auth):"
+        echo "   gh api user/packages/container/ats-node-test -X PATCH -f visibility=public"
+        echo "   Or: GitHub → Packages → ats-node-test → Package settings → Change visibility → Public"
     else
         echo "❌ Failed to push image"
         echo ""
