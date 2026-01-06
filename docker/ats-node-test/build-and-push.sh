@@ -5,16 +5,18 @@
 set -e
 
 REGISTRY="${1:-ghcr.io}"
-IMAGE_NAME="${2:-PicoPiece/ats-node-test}"
+IMAGE_NAME="${2:-picopiece/ats-node-test}"
 TAG="${3:-latest}"
-FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${TAG}"
+# Convert to lowercase (Docker registry requirement)
+IMAGE_NAME_LOWER=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
+FULL_IMAGE="${REGISTRY}/${IMAGE_NAME_LOWER}:${TAG}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "🐳 Building and pushing ATS Node Test image"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Registry: ${REGISTRY}"
-echo "Image: ${IMAGE_NAME}"
+echo "Image: ${IMAGE_NAME} → ${IMAGE_NAME_LOWER} (lowercase)"
 echo "Tag: ${TAG}"
 echo "Full: ${FULL_IMAGE}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
