@@ -100,13 +100,6 @@ def test_uart_read_directly(port: str, timeout: int = 5) -> Tuple[bool, str]:
         }, "F")
         # #endregion
         return False, str(e)
-        # #region agent log
-        debug_log("executor.py:test_uart_read", "Direct UART read exception", {
-            "error": str(e),
-            "error_type": type(e).__name__
-        }, "F")
-        # #endregion
-        return False, str(e)
 
 
 def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, boot_messages_file: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -117,19 +110,49 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, 
     
     tests = []
     
-    # Check if boot messages file was provided (captured immediately after reset)
+    # CRITICAL: Check boot_messages.log (test case "UART Boot Validation" reads from this file)
+    boot_messages_log = Path(results_dir) / "boot_messages.log"
     boot_messages_data = None
-    if boot_messages_file and boot_messages_file.exists():
+    
+    # Read from boot_messages.log if it exists (preferred)
+    if boot_messages_log.exists():
+        try:
+            with open(boot_messages_log, 'r') as f:
+                boot_messages_data = f.read()
+        except Exception as e:
+            print(f"⚠️  Failed to read boot_messages.log: {e}")
+    
+    # Fallback to boot_messages_file if provided and boot_messages.log doesn't exist
+    if not boot_messages_data and boot_messages_file and boot_messages_file.exists():
         try:
             with open(boot_messages_file, 'r') as f:
                 boot_messages_data = f.read()
-            # Check for boot patterns
-            boot_patterns = ['rst:', 'ets Jun', 'ESP-IDF', 'Guru Meditation', 'boot:', 'I (', 'E (', 'W (']
-            found_patterns = [p for p in boot_patterns if p in boot_messages_data]
-            if found_patterns:
-                print(f"✅ Boot messages file available: {len(boot_messages_data)} bytes, patterns: {', '.join(found_patterns[:3])}")
+            # Copy to boot_messages.log for test case to use
+            with open(boot_messages_log, 'w') as f:
+                f.write(boot_messages_data)
+            print(f"✅ Copied boot messages to {boot_messages_log}")
         except Exception as e:
             print(f"⚠️  Failed to read boot messages file: {e}")
+    
+    # Search for boot and firmware patterns in boot_messages.log
+    if boot_messages_data:
+        # Boot patterns: ESP32 boot sequence indicators
+        boot_patterns = ['rst:', 'ets Jun', 'ESP-IDF', 'Guru Meditation', 'boot:', 'I (', 'E (', 'W (']
+        # Firmware patterns: Application-specific indicators
+        firmware_patterns = ['firmware', 'app_main', 'Starting', 'Initialized', 'Ready']
+        
+        found_boot_patterns = [p for p in boot_patterns if p in boot_messages_data]
+        found_firmware_patterns = [p for p in firmware_patterns if p in boot_messages_data]
+        
+        if found_boot_patterns or found_firmware_patterns:
+            patterns_summary = []
+            if found_boot_patterns:
+                patterns_summary.append(f"boot: {', '.join(found_boot_patterns[:3])}")
+            if found_firmware_patterns:
+                patterns_summary.append(f"firmware: {', '.join(found_firmware_patterns[:3])}")
+            print(f"✅ boot_messages.log available: {len(boot_messages_data)} bytes, {', '.join(patterns_summary)}")
+        else:
+            print(f"⚠️  boot_messages.log has {len(boot_messages_data)} bytes but no boot/firmware patterns found")
     
     if test_runner_path.exists():
         import subprocess
@@ -157,21 +180,29 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, 
                     import re
                     
                     # Simple approach: Add check at the beginning of script
+                    # CRITICAL: Test case "UART Boot Validation" should ALWAYS read from boot_messages.log
                     boot_check = f'''
-# CRITICAL: Check for boot_messages.log first (captured in boot window)
+# CRITICAL: UART Boot Validation test case must use boot_messages.log
+# This file contains boot messages captured immediately after reset
+BOOT_MESSAGES_LOG="{results_dir}/boot_messages.log"
+
+# Update boot_messages.log from BOOT_MESSAGES_FILE if provided
 if [ -n "${{BOOT_MESSAGES_FILE}}" ] && [ -f "${{BOOT_MESSAGES_FILE}}" ]; then
-    echo "📄 [ATS] Using boot messages from file: ${{BOOT_MESSAGES_FILE}}"
-    cp "${{BOOT_MESSAGES_FILE}}" "{results_dir}/uart_boot.log" 2>/dev/null || true
-    echo "✅ [ATS] Boot messages copied to uart_boot.log"
-    # Skip UART read - use file instead
+    echo "📄 [ATS] Updating boot_messages.log from captured file: ${{BOOT_MESSAGES_FILE}}"
+    cp "${{BOOT_MESSAGES_FILE}}" "${{BOOT_MESSAGES_LOG}}" 2>/dev/null || true
+    echo "✅ [ATS] boot_messages.log updated"
     export UART_SKIP_READ=true
-elif [ -f "{results_dir}/uart_boot.log" ] && [ -s "{results_dir}/uart_boot.log" ]; then
-    echo "📄 [ATS] Using existing uart_boot.log file"
+elif [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
+    echo "📄 [ATS] Using existing boot_messages.log file"
     export UART_SKIP_READ=true
 else
-    echo "📡 [ATS] No boot messages file found, will read from UART"
+    echo "⚠️  [ATS] boot_messages.log not found - test may fail"
+    echo "📡 [ATS] Will attempt to read from UART (may miss boot messages)"
     export UART_SKIP_READ=false
 fi
+
+# Export path for test case to use
+export BOOT_MESSAGES_LOG="${{BOOT_MESSAGES_LOG}}"
 
 '''
                     # Insert at the beginning after shebang
@@ -210,14 +241,16 @@ fi
         if port:
             env['SERIAL_PORT'] = port
         # Pass boot messages file if available
+        # CRITICAL: Test case "UART Boot Validation" should read from boot_messages.log
+        boot_messages_log_path = Path(results_dir) / "boot_messages.log"
         if boot_messages_file and boot_messages_file.exists():
             env['BOOT_MESSAGES_FILE'] = str(boot_messages_file)
-            env['UART_BOOT_LOG'] = str(Path(results_dir) / "uart_boot.log")
             # #region agent log
             debug_log("executor.py:run_test_runner", "Boot messages file passed to test runner", {
                 "boot_messages_file": str(boot_messages_file)
             }, "I")
             # #endregion
+        env['BOOT_MESSAGES_LOG'] = str(boot_messages_log_path)  # Always set for test case
         
         # Use modified test runner (if modified) or original
         runner_to_execute = str(test_runner_path)
@@ -521,11 +554,12 @@ def main():
                 boot_success, boot_data = test_uart_read_directly(port, timeout=4)
                 
                 if boot_success and boot_data:
-                    # Save boot messages to file for test runner to use
+                    # CRITICAL: Always update boot_messages.log (append to capture all boot messages)
                     boot_messages_file = Path(args.results_dir) / "boot_messages.log"
-                    with open(boot_messages_file, 'w') as f:
+                    with open(boot_messages_file, 'a') as f:
                         f.write(boot_data)
-                    print(f"✅ Boot messages captured: {len(boot_data)} bytes saved to {boot_messages_file}")
+                        f.write('\n')  # Add newline separator
+                    print(f"✅ Boot messages captured: {len(boot_data)} bytes appended to {boot_messages_file}")
                     # #region agent log
                     debug_log("executor.py:268", "Boot messages captured", {
                         "boot_messages_file": str(boot_messages_file),
