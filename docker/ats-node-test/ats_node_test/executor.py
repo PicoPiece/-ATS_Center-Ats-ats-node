@@ -237,8 +237,8 @@ fi
             }, "I")
             # #endregion
         
-        # Use wrapper script if available, otherwise use original test runner
-        runner_to_execute = str(wrapper_script) if wrapper_script.exists() else str(test_runner_path)
+        # Use modified test runner (if modified) or original
+        runner_to_execute = str(test_runner_path)
         
         # #region agent log
         debug_log("executor.py:run_test_runner", "Before subprocess.run", {
