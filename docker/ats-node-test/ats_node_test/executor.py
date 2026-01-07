@@ -193,30 +193,56 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, 
                     replacement2 = f'📄 [ATS] Reading boot messages from {boot_messages_log_path}'
                     modified_script = re.sub(pattern2, replacement2, modified_script, flags=re.IGNORECASE)
                     
-                    # Pattern 3: Replace UART read command/function calls with file read
-                    # Look for patterns like "ats-uart-read" or function calls that read UART
-                    uart_read_pattern = r'(ats-uart-read|Reading UART from[^)]*\)|uart.*read[^)]*\))'
-                    file_read_replacement = f'''read_boot_messages_from_file()'''
-                    # Replace function calls, but be careful with syntax
-                    # Instead, replace the entire UART read block with file read
-                    
-                    # Pattern 4: Replace UART read retry logic block
-                    # Find the pattern: "UART read failed" ... retry attempts ... "UART read failed after"
-                    retry_block_pattern = r'⚠️\s*UART read failed[^\n]*\n(?:🔄\s*Retry attempt[^\n]*\n)*❌\s*UART read failed after[^\n]*'
+                    # Pattern 3: Replace entire UART read block including read_uart.sh call
+                    # Find pattern: if [ -e /dev/ttyUSB0 ]; then ... read_uart.sh ... fi
+                    uart_read_block_pattern = r'if\s+\[ -e /dev/ttyUSB0 \];\s+then[^\n]*\n(?:(?:[^\n]*\n)*?)(?:\./agent/read_uart\.sh|timeout.*cat.*/dev/ttyUSB0)[^\n]*\n(?:(?:[^\n]*\n)*?)fi'
                     file_read_block = f'''# CRITICAL: Read from boot_messages.log instead of UART
 if [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
     echo "📄 [ATS] Reading boot messages from ${{BOOT_MESSAGES_LOG}}"
-    UART_BOOT_OUTPUT=$(cat "${{BOOT_MESSAGES_LOG}}")
-    echo "${{UART_BOOT_OUTPUT}}"
+    cp "${{BOOT_MESSAGES_LOG}}" /workspace/results/uart_boot.log 2>/dev/null || true
     BOOT_MESSAGES_FOUND=true
 else
     echo "❌ [ATS] boot_messages.log not found: ${{BOOT_MESSAGES_LOG}}"
     BOOT_MESSAGES_FOUND=false
 fi'''
-                    modified_script = re.sub(retry_block_pattern, file_read_block, modified_script, flags=re.IGNORECASE | re.MULTILINE)
+                    modified_script = re.sub(uart_read_block_pattern, file_read_block, modified_script, flags=re.IGNORECASE | re.MULTILINE)
                     
-                    # Pattern 5: Replace "UART boot validation FAILED" check
-                    # If we have boot_messages.log, validation should pass
+                    # Pattern 4: Replace UART read retry logic block
+                    # Find the pattern: "UART read failed" ... retry attempts ... "UART read failed after"
+                    retry_block_pattern = r'⚠️\s*UART read failed[^\n]*\n(?:🔄\s*Retry attempt[^\n]*\n)*❌\s*UART read failed after[^\n]*'
+                    file_read_block2 = f'''# CRITICAL: Read from boot_messages.log instead of UART
+if [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
+    echo "📄 [ATS] Reading boot messages from ${{BOOT_MESSAGES_LOG}}"
+    cp "${{BOOT_MESSAGES_LOG}}" /workspace/results/uart_boot.log 2>/dev/null || true
+    BOOT_MESSAGES_FOUND=true
+else
+    echo "❌ [ATS] boot_messages.log not found: ${{BOOT_MESSAGES_LOG}}"
+    BOOT_MESSAGES_FOUND=false
+fi'''
+                    modified_script = re.sub(retry_block_pattern, file_read_block2, modified_script, flags=re.IGNORECASE | re.MULTILINE)
+                    
+                    # Pattern 5: Replace validation check to use boot_messages.log
+                    # Find pattern: grep -qi ets Jun|Guru Meditation|Hello from ESP32|ATS ESP32|Build successful /workspace/results/uart_boot.log
+                    validation_grep_pattern = r'if\s+grep\s+-qi\s+ets Jun\|Guru Meditation\|Hello from ESP32\|ATS ESP32\|Build successful[^\n]*uart_boot\.log[^\n]*\n\s+then[^\n]*\n\s+echo\s+✅\s+UART boot validation PASSED[^\n]*\n\s+TEST_RESULTS\+=\[UART_BOOT=PASS\][^\n]*\n\s+\(\(TEST_PASSED\+\+\)\)[^\n]*\n\s+else[^\n]*\n\s+echo[^\n]*\n\s+fi'
+                    validation_replacement = f'''# Check boot_messages.log for validation
+if [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
+    # Search for boot patterns in boot_messages.log
+    if grep -qE "(rst:|ets Jun|ESP-IDF|Guru Meditation|Hello from ESP32|ATS ESP32|Build successful|I \\(|E \\(|W \\()" "${{BOOT_MESSAGES_LOG}}" 2>/dev/null; then
+        echo "✅ UART boot validation PASSED (boot patterns found in boot_messages.log)"
+        TEST_RESULTS+=(UART_BOOT=PASS)
+        ((TEST_PASSED++))
+        BOOT_VALIDATION_PASSED=true
+    else
+        echo "❌ UART boot validation FAILED (no boot patterns in boot_messages.log)"
+        BOOT_VALIDATION_PASSED=false
+    fi
+else
+    echo "❌ UART boot validation FAILED (boot_messages.log not found)"
+    BOOT_VALIDATION_PASSED=false
+fi'''
+                    modified_script = re.sub(validation_grep_pattern, validation_replacement, modified_script, flags=re.IGNORECASE | re.MULTILINE)
+                    
+                    # Pattern 6: Also replace simple "UART boot validation FAILED" message
                     validation_fail_pattern = r'❌\s*UART boot validation FAILED[^\n]*'
                     validation_pass_replacement = f'''# Check boot_messages.log for validation
 if [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
