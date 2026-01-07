@@ -119,9 +119,27 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, 
     
     tests = []
     
+    # CRITICAL: Check if boot messages file was provided (captured immediately after reset)
+    boot_messages_data = None
+    if boot_messages_file and boot_messages_file.exists():
+        print(f"\n📄 [DEBUG] Reading boot messages from file: {boot_messages_file}")
+        try:
+            with open(boot_messages_file, 'r') as f:
+                boot_messages_data = f.read()
+            print(f"✅ [DEBUG] Boot messages file read: {len(boot_messages_data)} bytes")
+            # Check for boot patterns
+            boot_patterns = ['rst:', 'ets Jun', 'ESP-IDF', 'Guru Meditation', 'boot:', 'I (', 'E (', 'W (']
+            found_patterns = [p for p in boot_patterns if p in boot_messages_data]
+            if found_patterns:
+                print(f"✅ [DEBUG] Boot patterns found in file: {', '.join(found_patterns)}")
+            else:
+                print(f"⚠️  [DEBUG] No boot patterns found in file (may be application messages only)")
+        except Exception as e:
+            print(f"⚠️  [DEBUG] Failed to read boot messages file: {e}")
+    
     # CRITICAL: Test UART read directly BEFORE test runner to verify ESP32 is actually booting
     port = os.environ.get('SERIAL_PORT', '/dev/ttyUSB0')
-    if os.path.exists(port):
+    if os.path.exists(port) and not boot_messages_data:
         print("\n🔍 [DEBUG] Pre-flight UART check before test runner...")
         uart_success, uart_data = test_uart_read_directly(port, timeout=3)
         if uart_success:
