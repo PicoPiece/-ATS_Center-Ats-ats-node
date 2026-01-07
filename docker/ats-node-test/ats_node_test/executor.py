@@ -186,7 +186,7 @@ fi
 exec "{test_runner_path}" "$@"
 """
             with open(wrapper_script, 'w') as f:
-                f.write(wrapper_script)
+                f.write(wrapper_content)
             os.chmod(wrapper_script, 0o755)
             print(f"✅ [INFO] Wrapper script created: {wrapper_script}")
             # #region agent log
