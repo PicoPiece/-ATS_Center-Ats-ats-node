@@ -111,7 +111,7 @@ def test_uart_read_directly(port: str, timeout: int = 5) -> Tuple[bool, str]:
         return False, str(e)
 
 
-def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str) -> List[Dict[str, Any]]:
+def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, boot_messages_file: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Invoke test runner (ats-test-esp32-demo) and collect results."""
     # Test runner is expected to be in workspace
     # It should read manifest and output results
@@ -141,6 +141,15 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str) 
         env['RESULTS_DIR'] = results_dir
         env['WORKSPACE'] = workspace
         env['SERIAL_PORT'] = port
+        # Pass boot messages file if available (test runner can use this instead of reading UART)
+        if boot_messages_file and boot_messages_file.exists():
+            env['BOOT_MESSAGES_FILE'] = str(boot_messages_file)
+            print(f"📄 [DEBUG] Passing boot messages file to test runner: {boot_messages_file}")
+            # #region agent log
+            debug_log("executor.py:run_test_runner", "Boot messages file passed to test runner", {
+                "boot_messages_file": str(boot_messages_file)
+            }, "I")
+            # #endregion
         
         # #region agent log
         debug_log("executor.py:run_test_runner", "Before subprocess.run", {
@@ -375,6 +384,7 @@ def main():
         # CRITICAL TIMING: ESP32 boot messages appear within first 1-3 seconds after reset
         # Test runner must start reading UART IMMEDIATELY after boot wait
         # If we wait too long, boot messages will be missed
+        boot_messages_file = None
         if device_target == 'esp32' and flash_start_time:
             time_since_flash = time.time() - flash_start_time
             print(f"\n⏱️  Time since flash: {time_since_flash:.2f}s")
@@ -388,19 +398,55 @@ def main():
             
             # If too much time has passed, boot messages may have been missed
             # In this case, we should do another reset to trigger fresh boot messages
-            if time_since_flash > 8.0:  # More than 8 seconds since flash
+            port = detect_esp32_port()
+            if port and time_since_flash > 8.0:  # More than 8 seconds since flash
                 print("⚠️  Too much time has passed since flash, performing fresh reset for boot messages...")
-                port = detect_esp32_port()
-                if port:
-                    reset_esp32(port)
-                    time.sleep(1.0)  # Short wait for boot to start
-                    print("✅ Fresh reset complete, test runner should catch boot messages now")
+                reset_esp32(port)
+                
+                # CRITICAL: Read boot messages IMMEDIATELY after reset (within boot window)
+                # Boot messages appear in first 1-3 seconds, we must read them NOW
+                print("📡 [CRITICAL] Reading boot messages immediately after reset (boot window: 0-3s)...")
+                # #region agent log
+                debug_log("executor.py:254", "Before immediate boot message read", {
+                    "port": port,
+                    "time_since_reset": 0,
+                    "note": "Reading immediately after reset to catch boot messages"
+                }, "I")
+                # #endregion
+                
+                # Read UART immediately after reset to capture boot messages
+                boot_success, boot_data = test_uart_read_directly(port, timeout=4)
+                
+                if boot_success and boot_data:
+                    # Save boot messages to file for test runner to use
+                    boot_messages_file = Path(args.results_dir) / "boot_messages.log"
+                    with open(boot_messages_file, 'w') as f:
+                        f.write(boot_data)
+                    print(f"✅ Boot messages captured: {len(boot_data)} bytes saved to {boot_messages_file}")
                     # #region agent log
-                    debug_log("executor.py:253", "Fresh reset for boot messages", {
-                        "time_since_flash_before_reset": time_since_flash,
-                        "reset_reason": "Too much time passed, boot messages may be missed"
-                    }, "D")
+                    debug_log("executor.py:268", "Boot messages captured", {
+                        "boot_messages_file": str(boot_messages_file),
+                        "boot_data_length": len(boot_data),
+                        "boot_data_preview": boot_data[:500]
+                    }, "I")
                     # #endregion
+                else:
+                    print("⚠️  No boot messages captured after fresh reset")
+                    # #region agent log
+                    debug_log("executor.py:276", "No boot messages captured", {
+                        "boot_success": boot_success
+                    }, "I")
+                    # #endregion
+                
+                time.sleep(0.5)  # Small delay before test runner starts
+                print("✅ Fresh reset complete, boot messages captured for test runner")
+                # #region agent log
+                debug_log("executor.py:282", "Fresh reset for boot messages", {
+                    "time_since_flash_before_reset": time_since_flash,
+                    "reset_reason": "Too much time passed, boot messages may be missed",
+                    "boot_messages_captured": boot_success
+                }, "D")
+                # #endregion
         
         print("\n🧪 Running tests...")
         # #region agent log
@@ -410,7 +456,7 @@ def main():
         }, "D")
         # #endregion
         test_runner_start = time.time()
-        tests = run_test_runner(args.workspace, manifest, args.results_dir)
+        tests = run_test_runner(args.workspace, manifest, args.results_dir, boot_messages_file)
         test_runner_end = time.time()
         # #region agent log
         debug_log("executor.py:267", "After run_test_runner", {
