@@ -195,9 +195,11 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, 
                     
                     # Pattern 3: Replace entire UART read block including read_uart.sh call
                     # Find pattern: if [ -e /dev/ttyUSB0 ]; then ... read_uart.sh ... fi
-                    # Use DOTALL to match across newlines
-                    uart_read_block_pattern = r'if\s+\[ -e /dev/ttyUSB0 \];\s+then.*?\./agent/read_uart\.sh.*?fi'
+                    # Match with flexible whitespace and nested if statements
+                    # Pattern matches: if [ -e /dev/ttyUSB0 ]; then ... (nested if) ... fi ... (validation grep) ... fi
+                    uart_read_block_pattern = r'if\s+\[ -e /dev/ttyUSB0 \]\s*;\s*then.*?read_uart\.sh.*?uart_boot\.log.*?if\s+grep\s+-qi.*?uart_boot\.log'
                     file_read_block = f'''# CRITICAL: Read from boot_messages.log instead of UART
+# Copy boot_messages.log to uart_boot.log for compatibility
 if [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
     echo "📄 [ATS] Reading boot messages from ${{BOOT_MESSAGES_LOG}}"
     cp "${{BOOT_MESSAGES_LOG}}" /workspace/results/uart_boot.log 2>/dev/null || true
@@ -205,12 +207,19 @@ if [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
 else
     echo "❌ [ATS] boot_messages.log not found: ${{BOOT_MESSAGES_LOG}}"
     BOOT_MESSAGES_FOUND=false
-fi'''
+fi
+# Check for boot success indicators in boot_messages.log (copied to uart_boot.log)
+if grep -qi "ets Jun\|Guru Meditation\|Hello from ESP32\|ATS ESP32\|Build successful" /workspace/results/uart_boot.log 2>/dev/null; then'''
                     modified_script = re.sub(uart_read_block_pattern, file_read_block, modified_script, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
                     
-                    # Pattern 3b: Also replace simpler pattern without read_uart.sh
-                    uart_read_block_pattern2 = r'if\s+\[ -e /dev/ttyUSB0 \];\s+then.*?timeout.*cat.*/dev/ttyUSB0.*?fi'
+                    # Pattern 3b: Also replace simpler pattern without read_uart.sh (fallback)
+                    uart_read_block_pattern2 = r'if\s+\[ -e /dev/ttyUSB0 \]\s*;\s*then.*?timeout.*cat.*/dev/ttyUSB0.*?uart_boot\.log.*?if\s+grep\s+-qi.*?uart_boot\.log'
                     modified_script = re.sub(uart_read_block_pattern2, file_read_block, modified_script, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+                    
+                    # Pattern 3c: More specific - match the exact structure from log
+                    # Match: if [ -e /dev/ttyUSB0 ]; then ... if [ -f ./agent/read_uart.sh ]; then ... fi ... else ... fi ... if grep ...
+                    uart_read_block_pattern3 = r'if\s+\[ -e /dev/ttyUSB0 \]\s*;\s*then\s+if\s+\[ -f \./agent/read_uart\.sh \]\s*;\s*then.*?read_uart\.sh.*?uart_boot\.log.*?else.*?timeout.*cat.*/dev/ttyUSB0.*?uart_boot\.log.*?fi\s+if\s+grep\s+-qi'
+                    modified_script = re.sub(uart_read_block_pattern3, file_read_block, modified_script, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
                     
                     # Pattern 4: Replace UART read retry logic block
                     # Find the pattern: "UART read failed" ... retry attempts ... "UART read failed after"
