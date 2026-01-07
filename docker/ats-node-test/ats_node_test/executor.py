@@ -151,50 +151,72 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, 
         import subprocess
         print(f"🧪 Running test runner: {test_runner_path}")
         
-        # CRITICAL: Create wrapper script that checks boot_messages.log first
-        # Test runner script may not support BOOT_MESSAGES_FILE, so we create a wrapper
-        wrapper_script = Path(results_dir) / "run_tests_wrapper.sh"
+        # CRITICAL: Modify test runner script to use boot_messages.log if available
+        # Instead of creating wrapper, we'll patch the test runner script directly
+        test_runner_modified = False
         if boot_messages_file and boot_messages_file.exists():
             print(f"📄 [INFO] Boot messages file available: {boot_messages_file}")
-            print("   Creating wrapper script to use boot_messages.log instead of UART read")
+            print("   Modifying test runner to use boot_messages.log instead of UART read")
             
-            # Create wrapper that modifies test runner behavior
-            wrapper_content = f"""#!/bin/bash
-set -e
-
-# Wrapper script to use boot_messages.log if available
-BOOT_MSG_FILE="{boot_messages_file}"
-
-if [ -f "$BOOT_MSG_FILE" ]; then
-    echo "📄 [WRAPPER] Using boot messages from file: $BOOT_MSG_FILE"
-    echo "   File size: $(stat -c%s "$BOOT_MSG_FILE" 2>/dev/null || echo "0") bytes"
-    
-    # Copy boot messages to expected location for test runner
-    # Test runner may look for boot messages in results directory
-    cp "$BOOT_MSG_FILE" "{results_dir}/uart_boot.log" 2>/dev/null || true
-    
-    # Set environment variable for test runner
-    export BOOT_MESSAGES_FILE="$BOOT_MSG_FILE"
-    export UART_BOOT_LOG="{results_dir}/uart_boot.log"
-    
-    echo "✅ [WRAPPER] Boot messages file prepared for test runner"
+            # Read original test runner script
+            try:
+                with open(test_runner_path, 'r') as f:
+                    original_script = f.read()
+                
+                # Check if script already has boot messages check
+                if 'BOOT_MESSAGES_FILE' not in original_script and 'uart_boot.log' not in original_script:
+                    # Create backup
+                    backup_path = test_runner_path.with_suffix('.sh.backup')
+                    with open(backup_path, 'w') as f:
+                        f.write(original_script)
+                    
+                    # Add boot messages check at the beginning of UART read section
+                    # Look for UART read pattern and inject check before it
+                    uart_read_pattern = r'Reading UART|UART.*read|uart.*boot'
+                    import re
+                    
+                    # Simple approach: Add check at the beginning of script
+                    boot_check = f'''
+# CRITICAL: Check for boot_messages.log first (captured in boot window)
+if [ -n "${{BOOT_MESSAGES_FILE}}" ] && [ -f "${{BOOT_MESSAGES_FILE}}" ]; then
+    echo "📄 [ATS] Using boot messages from file: ${{BOOT_MESSAGES_FILE}}"
+    cp "${{BOOT_MESSAGES_FILE}}" "{results_dir}/uart_boot.log" 2>/dev/null || true
+    echo "✅ [ATS] Boot messages copied to uart_boot.log"
+    # Skip UART read - use file instead
+    export UART_SKIP_READ=true
+elif [ -f "{results_dir}/uart_boot.log" ] && [ -s "{results_dir}/uart_boot.log" ]; then
+    echo "📄 [ATS] Using existing uart_boot.log file"
+    export UART_SKIP_READ=true
 else
-    echo "⚠️  [WRAPPER] Boot messages file not found, test runner will read UART"
+    echo "📡 [ATS] No boot messages file found, will read from UART"
+    export UART_SKIP_READ=false
 fi
 
-# Run original test runner
-exec "{test_runner_path}" "$@"
-"""
-            with open(wrapper_script, 'w') as f:
-                f.write(wrapper_content)
-            os.chmod(wrapper_script, 0o755)
-            print(f"✅ [INFO] Wrapper script created: {wrapper_script}")
-            # #region agent log
-            debug_log("executor.py:run_test_runner", "Wrapper script created", {
-                "wrapper_script": str(wrapper_script),
-                "boot_messages_file": str(boot_messages_file)
-            }, "I")
-            # #endregion
+'''
+                    # Insert at the beginning after shebang
+                    if original_script.startswith('#!/'):
+                        lines = original_script.split('\n', 1)
+                        modified_script = lines[0] + '\n' + boot_check + lines[1] if len(lines) > 1 else original_script
+                    else:
+                        modified_script = boot_check + original_script
+                    
+                    # Write modified script
+                    with open(test_runner_path, 'w') as f:
+                        f.write(modified_script)
+                    os.chmod(test_runner_path, 0o755)
+                    test_runner_modified = True
+                    print(f"✅ [INFO] Test runner script modified to check boot_messages.log first")
+                    # #region agent log
+                    debug_log("executor.py:run_test_runner", "Test runner script modified", {
+                        "test_runner_path": str(test_runner_path),
+                        "boot_messages_file": str(boot_messages_file)
+                    }, "I")
+                    # #endregion
+                else:
+                    print("   Test runner already has boot messages check")
+            except Exception as e:
+                print(f"⚠️  Failed to modify test runner script: {e}")
+                print("   Will rely on workaround instead")
         
         # Test runner should output to results_dir
         # Pass manifest path as argument
