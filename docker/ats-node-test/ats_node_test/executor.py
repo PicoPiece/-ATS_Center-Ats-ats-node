@@ -40,7 +40,6 @@ def test_uart_read_directly(port: str, timeout: int = 5) -> Tuple[bool, str]:
         import serial
         import time
         
-        print(f"🔍 [DEBUG] Testing direct UART read from {port}...")
         # #region agent log
         debug_log("executor.py:test_uart_read", "Before direct UART read", {
             "port": port,
@@ -76,16 +75,10 @@ def test_uart_read_directly(port: str, timeout: int = 5) -> Tuple[bool, str]:
         data_str = data.decode('utf-8', errors='ignore')
         success = len(data) > 0
         
-        print(f"🔍 [DEBUG] UART read result: {len(data)} bytes")
+        # Check for common ESP32 boot patterns
         if data_str:
-            print(f"🔍 [DEBUG] First 200 chars: {data_str[:200]}")
-            # Check for common ESP32 boot patterns
             patterns = ['rst:', 'ets Jun', 'ESP-IDF', 'Guru Meditation', 'boot:', 'I (', 'E (', 'W (']
             found_patterns = [p for p in patterns if p in data_str]
-            if found_patterns:
-                print(f"✅ [DEBUG] Found boot patterns: {', '.join(found_patterns)}")
-            else:
-                print(f"⚠️  [DEBUG] No common boot patterns found")
         
         # #region agent log
         debug_log("executor.py:test_uart_read", "After direct UART read", {
@@ -98,10 +91,15 @@ def test_uart_read_directly(port: str, timeout: int = 5) -> Tuple[bool, str]:
         
         return success, data_str
     except ImportError:
-        print("⚠️  [DEBUG] pyserial not available for direct UART test")
         return False, ""
     except Exception as e:
-        print(f"❌ [DEBUG] Direct UART read failed: {e}")
+        # #region agent log
+        debug_log("executor.py:test_uart_read", "Direct UART read exception", {
+            "error": str(e),
+            "error_type": type(e).__name__
+        }, "F")
+        # #endregion
+        return False, str(e)
         # #region agent log
         debug_log("executor.py:test_uart_read", "Direct UART read exception", {
             "error": str(e),
@@ -119,44 +117,27 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, 
     
     tests = []
     
-    # CRITICAL: Check if boot messages file was provided (captured immediately after reset)
+    # Check if boot messages file was provided (captured immediately after reset)
     boot_messages_data = None
     if boot_messages_file and boot_messages_file.exists():
-        print(f"\n📄 [DEBUG] Reading boot messages from file: {boot_messages_file}")
         try:
             with open(boot_messages_file, 'r') as f:
                 boot_messages_data = f.read()
-            print(f"✅ [DEBUG] Boot messages file read: {len(boot_messages_data)} bytes")
             # Check for boot patterns
             boot_patterns = ['rst:', 'ets Jun', 'ESP-IDF', 'Guru Meditation', 'boot:', 'I (', 'E (', 'W (']
             found_patterns = [p for p in boot_patterns if p in boot_messages_data]
             if found_patterns:
-                print(f"✅ [DEBUG] Boot patterns found in file: {', '.join(found_patterns)}")
-            else:
-                print(f"⚠️  [DEBUG] No boot patterns found in file (may be application messages only)")
+                print(f"✅ Boot messages file available: {len(boot_messages_data)} bytes, patterns: {', '.join(found_patterns[:3])}")
         except Exception as e:
-            print(f"⚠️  [DEBUG] Failed to read boot messages file: {e}")
-    
-    # CRITICAL: Test UART read directly BEFORE test runner to verify ESP32 is actually booting
-    port = os.environ.get('SERIAL_PORT', '/dev/ttyUSB0')
-    if os.path.exists(port) and not boot_messages_data:
-        print("\n🔍 [DEBUG] Pre-flight UART check before test runner...")
-        uart_success, uart_data = test_uart_read_directly(port, timeout=3)
-        if uart_success:
-            print(f"✅ [DEBUG] UART is readable, got {len(uart_data)} bytes")
-        else:
-            print(f"⚠️  [DEBUG] UART read returned no data - ESP32 may not be booting")
+            print(f"⚠️  Failed to read boot messages file: {e}")
     
     if test_runner_path.exists():
         import subprocess
         print(f"🧪 Running test runner: {test_runner_path}")
         
-        # CRITICAL: Modify test runner script to use boot_messages.log if available
-        # Instead of creating wrapper, we'll patch the test runner script directly
+        # Modify test runner script to use boot_messages.log if available
         test_runner_modified = False
         if boot_messages_file and boot_messages_file.exists():
-            print(f"📄 [INFO] Boot messages file available: {boot_messages_file}")
-            print("   Modifying test runner to use boot_messages.log instead of UART read")
             
             # Read original test runner script
             try:
@@ -205,15 +186,12 @@ fi
                         f.write(modified_script)
                     os.chmod(test_runner_path, 0o755)
                     test_runner_modified = True
-                    print(f"✅ [INFO] Test runner script modified to check boot_messages.log first")
                     # #region agent log
                     debug_log("executor.py:run_test_runner", "Test runner script modified", {
                         "test_runner_path": str(test_runner_path),
                         "boot_messages_file": str(boot_messages_file)
                     }, "I")
                     # #endregion
-                else:
-                    print("   Test runner already has boot messages check")
             except Exception as e:
                 print(f"⚠️  Failed to modify test runner script: {e}")
                 print("   Will rely on workaround instead")
@@ -226,11 +204,10 @@ fi
         env['RESULTS_DIR'] = results_dir
         env['WORKSPACE'] = workspace
         env['SERIAL_PORT'] = port
-        # Pass boot messages file if available (test runner can use this instead of reading UART)
+        # Pass boot messages file if available
         if boot_messages_file and boot_messages_file.exists():
             env['BOOT_MESSAGES_FILE'] = str(boot_messages_file)
             env['UART_BOOT_LOG'] = str(Path(results_dir) / "uart_boot.log")
-            print(f"📄 [DEBUG] Passing boot messages file to test runner: {boot_messages_file}")
             # #region agent log
             debug_log("executor.py:run_test_runner", "Boot messages file passed to test runner", {
                 "boot_messages_file": str(boot_messages_file)
