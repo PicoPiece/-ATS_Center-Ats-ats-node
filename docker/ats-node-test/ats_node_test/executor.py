@@ -167,38 +167,64 @@ def run_test_runner(workspace: str, manifest: Dict[str, Any], results_dir: str, 
                 with open(test_runner_path, 'r') as f:
                     original_script = f.read()
                 
-                # Check if script already has boot messages check
-                if 'BOOT_MESSAGES_FILE' not in original_script and 'uart_boot.log' not in original_script:
+                # CRITICAL: Always modify test runner to use boot_messages.log
+                # Check if script already has our modification
+                needs_modification = 'BOOT_MESSAGES_LOG' not in original_script or 'boot_messages.log' not in original_script
+                
+                if needs_modification:
                     # Create backup
                     backup_path = test_runner_path.with_suffix('.sh.backup')
                     with open(backup_path, 'w') as f:
                         f.write(original_script)
                     
-                    # Add boot messages check at the beginning of UART read section
-                    # Look for UART read pattern and inject check before it
-                    uart_read_pattern = r'Reading UART|UART.*read|uart.*boot'
                     import re
+                    boot_messages_log_path = f"{results_dir}/boot_messages.log"
+                    modified_script = original_script
                     
-                    # Simple approach: Add check at the beginning of script
-                    # CRITICAL: Test case "UART Boot Validation" should ALWAYS read from boot_messages.log
+                    # CRITICAL: Replace UART read logic with boot_messages.log read
+                    # Pattern 1: Replace "Reading UART boot log from /dev/ttyUSB0" with reading from file
+                    # This matches the exact pattern from the test case
+                    pattern1 = r'📡\s*Reading UART boot log from[^\n]*'
+                    replacement1 = f'📄 Reading boot messages from {boot_messages_log_path}'
+                    modified_script = re.sub(pattern1, replacement1, modified_script, flags=re.IGNORECASE)
+                    
+                    # Pattern 2: Replace "ats-uart-read" or similar UART read commands
+                    # Look for function calls or commands that read from UART
+                    uart_read_cmd_pattern = r'(ats-uart-read|Reading UART from)[^\n]*'
+                    file_read_block = f'''# CRITICAL: Read from boot_messages.log instead of UART
+if [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
+    echo "📄 [ATS] Reading boot messages from ${{BOOT_MESSAGES_LOG}}"
+    UART_BOOT_OUTPUT=$(cat "${{BOOT_MESSAGES_LOG}}")
+    echo "${{UART_BOOT_OUTPUT}}"
+else
+    echo "❌ [ATS] boot_messages.log not found: ${{BOOT_MESSAGES_LOG}}"
+    exit 1
+fi'''
+                    modified_script = re.sub(uart_read_cmd_pattern, file_read_block, modified_script, flags=re.IGNORECASE)
+                    
+                    # Pattern 3: Replace UART read retry logic with file read (no retries needed for file)
+                    # Look for retry patterns and simplify to single file read
+                    retry_pattern = r'UART read failed.*retrying[^\n]*\n.*Retry attempt[^\n]*'
+                    modified_script = re.sub(retry_pattern, '', modified_script, flags=re.IGNORECASE | re.MULTILINE)
+                    
+                    # Add check at the beginning to ensure boot_messages.log exists and is used
                     boot_check = f'''
 # CRITICAL: UART Boot Validation test case must use boot_messages.log
 # This file contains boot messages captured immediately after reset
-BOOT_MESSAGES_LOG="{results_dir}/boot_messages.log"
+BOOT_MESSAGES_LOG="{boot_messages_log_path}"
 
 # Update boot_messages.log from BOOT_MESSAGES_FILE if provided
 if [ -n "${{BOOT_MESSAGES_FILE}}" ] && [ -f "${{BOOT_MESSAGES_FILE}}" ]; then
     echo "📄 [ATS] Updating boot_messages.log from captured file: ${{BOOT_MESSAGES_FILE}}"
     cp "${{BOOT_MESSAGES_FILE}}" "${{BOOT_MESSAGES_LOG}}" 2>/dev/null || true
     echo "✅ [ATS] boot_messages.log updated"
-    export UART_SKIP_READ=true
-elif [ -f "${{BOOT_MESSAGES_LOG}}" ] && [ -s "${{BOOT_MESSAGES_LOG}}" ]; then
-    echo "📄 [ATS] Using existing boot_messages.log file"
-    export UART_SKIP_READ=true
-else
-    echo "⚠️  [ATS] boot_messages.log not found - test may fail"
-    echo "📡 [ATS] Will attempt to read from UART (may miss boot messages)"
-    export UART_SKIP_READ=false
+fi
+
+# Ensure boot_messages.log exists before test runs
+if [ ! -f "${{BOOT_MESSAGES_LOG}}" ]; then
+    echo "⚠️  [ATS] boot_messages.log not found: ${{BOOT_MESSAGES_LOG}}"
+    echo "   This test requires boot_messages.log to validate boot sequence"
+    exit 1
 fi
 
 # Export path for test case to use
@@ -206,11 +232,11 @@ export BOOT_MESSAGES_LOG="${{BOOT_MESSAGES_LOG}}"
 
 '''
                     # Insert at the beginning after shebang
-                    if original_script.startswith('#!/'):
-                        lines = original_script.split('\n', 1)
-                        modified_script = lines[0] + '\n' + boot_check + lines[1] if len(lines) > 1 else original_script
+                    if modified_script.startswith('#!/'):
+                        lines = modified_script.split('\n', 1)
+                        modified_script = lines[0] + '\n' + boot_check + lines[1] if len(lines) > 1 else modified_script
                     else:
-                        modified_script = boot_check + original_script
+                        modified_script = boot_check + modified_script
                     
                     # Write modified script
                     with open(test_runner_path, 'w') as f:
